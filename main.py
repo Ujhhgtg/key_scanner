@@ -571,6 +571,28 @@ def _keep_context(text: str, window: int = CONTEXT_WINDOW) -> str:
     return "\n".join(text[l:r] for l, r in merged)
 
 
+def _filter_structured(data, context_words):
+    if isinstance(data, dict):
+        if any(any(w in k.lower() for w in context_words) for k in data):
+            return data
+        result = {}
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                filtered = _filter_structured(v, context_words)
+                if filtered is not None:
+                    result[k] = filtered
+        return result if result else None
+    if isinstance(data, list):
+        result = []
+        for item in data:
+            if isinstance(item, (dict, list)):
+                filtered = _filter_structured(item, context_words)
+                if filtered is not None:
+                    result.append(filtered)
+        return result if result else None
+    return None
+
+
 def preprocess_content(content: str, file_url: str) -> str | None:
     ext = _file_ext(file_url)
 
@@ -595,16 +617,10 @@ def preprocess_content(content: str, file_url: str) -> str | None:
                 data = json.loads(content)
         except Exception:
             return _keep_context(content) or None
-        if isinstance(data, dict):
-            relevant = {}
-            for k, v in data.items():
-                kl = k.lower()
-                if any(w in kl for w in _CONTEXT_WORDS):
-                    relevant[k] = str(v) if not isinstance(v, str) else v
-            if not relevant:
-                return None
-            return json.dumps(relevant, indent=2, ensure_ascii=False)
-        return None
+        filtered = _filter_structured(data, _CONTEXT_WORDS)
+        if filtered is None:
+            return None
+        return json.dumps(filtered, indent=2, ensure_ascii=False)
 
     # 3. simple kv pairs (ini / env / conf)
     if ext in (".ini", ".env", ".cfg", ".conf", ".properties") or ".env" in ext:
@@ -643,6 +659,7 @@ def llm_extract_all(
         prompt_text = (
             LLM_BASE_PROMPT + provider_hints + "\n" + LLM_PROMPT_TAIL + content
         )
+        print(f"  prompt length: {len(prompt_text)}")
         try:
             enc = tiktoken.encoding_for_model(llm_model)
         except Exception:
@@ -926,6 +943,7 @@ def main() -> None:
                     total_processed += p
                     total_skipped += s
                     import time
+
                     time.sleep(5)
             else:
                 with ThreadPoolExecutor(max_workers=10) as executor:
