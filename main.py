@@ -3,6 +3,8 @@ import json
 import os
 import re
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
@@ -276,7 +278,7 @@ def extract_keys(content: str) -> list[tuple[str, str]]:
 
 
 def process_issue(
-    issue: dict, saved_keys: set[str], ignore_saved: bool = False
+    issue: dict, saved_keys: set[str], lock: threading.Lock, ignore_saved: bool = False
 ) -> tuple[int, int]:
     repo_url: str = issue["repository_url"]
     parts = repo_url.rstrip("/").split("/")
@@ -325,25 +327,25 @@ def process_issue(
             valid_type, validation_result = verify_key(key_value, base_url, model_name)
             print(f"    verification: {valid_type}")
 
-        if not ignore_saved and key_value in saved_keys:
-            skipped += 1
-            continue
-
-        entry = {
-            "key": key_value,
-            "key_type": key_type,
-            "repo_owner": owner,
-            "repo_name": repo_name,
-            "file_url": file_url,
-            "valid_type": valid_type,
-            "validation_result": validation_result,
-        }
-        if model_name:
-            entry["model_name"] = model_name
-        if base_url:
-            entry["base_url"] = base_url
-        save_key(entry)
-        saved_keys.add(key_value)
+        with lock:
+            if not ignore_saved and key_value in saved_keys:
+                skipped += 1
+                continue
+            entry = {
+                "key": key_value,
+                "key_type": key_type,
+                "repo_owner": owner,
+                "repo_name": repo_name,
+                "file_url": file_url,
+                "valid_type": valid_type,
+                "validation_result": validation_result,
+            }
+            if model_name:
+                entry["model_name"] = model_name
+            if base_url:
+                entry["base_url"] = base_url
+            save_key(entry)
+            saved_keys.add(key_value)
         processed += 1
 
     return processed, skipped
@@ -371,6 +373,7 @@ def main() -> None:
     total_processed = 0
     total_skipped = 0
     page = 1
+    lock = threading.Lock()
 
     with httpx.Client(headers=headers, timeout=30.0) as client:
         while True:
@@ -393,10 +396,17 @@ def main() -> None:
                 break
 
             print(f"\n--- Page {page} ({len(batch)} issues) ---")
-            for issue in batch:
-                p, s = process_issue(issue, saved_keys, ignore_saved=args.ignore_saved)
-                total_processed += p
-                total_skipped += s
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(
+                        process_issue, issue, saved_keys, lock, args.ignore_saved
+                    )
+                    for issue in batch
+                ]
+                for f in as_completed(futures):
+                    p, s = f.result()
+                    total_processed += p
+                    total_skipped += s
 
             if len(batch) < 100:
                 break
