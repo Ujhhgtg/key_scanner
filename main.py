@@ -419,6 +419,53 @@ PROVIDER_MAP: list[tuple[set[str], str]] = [
     ),
 ]
 
+CONTEXT_WINDOW = 30
+
+LLM_KEYWORDS: set[str] = set()
+for _kw_set, _ in PROVIDER_MAP:
+    for kw in _kw_set:
+        LLM_KEYWORDS.add(kw.lower())
+for _pfx in (
+    "sk-",
+    "AIza",
+    "AKIA",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "xoxs-",
+    "sk_live_",
+    "pk_live_",
+    "rk_live_",
+    "-----BEGIN",
+    "mongodb+srv://",
+    "mongodb://",
+    "hooks.slack.com",
+    "s3.amazonaws.com",
+    "password",
+    "passwd",
+    "pwd",
+    "api_key",
+    "apikey",
+    "secret",
+    "token",
+    "api_key",
+    "api-key",
+):
+    LLM_KEYWORDS.add(_pfx.lower())
+
+_CONTEXT_WORDS = {"model", "base", "url", "key", "api", "secret", "token", "password"}
+
+
+def _ext_keywords() -> set[str]:
+    return LLM_KEYWORDS
+
+
 LLM_BASE_PROMPT = """You are analyzing a configuration file that may contain api keys, model names, and base urls for llm providers.
 
 extract all api keys from the file along with their associated model name and base url.
@@ -435,6 +482,7 @@ if only a provider name is mentioned and the base url is not explicitly set, inf
 LLM_PROMPT_TAIL = """
 - return ONLY a json array of objects. no markdown, no backticks, no explanation.
 - if nothing is found, return an empty array [].
+- the file content below may be truncated — only extract keys that are actually present.
 
 file content:
 """
@@ -470,6 +518,114 @@ def _build_provider_lines(content: str) -> str:
     if not lines:
         lines.append("  (no provider name detected)")
     return "\n".join(lines)
+
+
+def _file_ext(url: str) -> str:
+    path = url.rstrip("/")
+    if "/blob/" in path:
+        path = path.split("/blob/", 1)[1]
+        parts = path.split("/", 1)
+        if len(parts) > 1:
+            path = parts[1]
+        else:
+            return ""
+    dot = path.rfind(".")
+    return path[dot:].lower() if dot != -1 else ""
+
+
+def _strip_md(text: str) -> str:
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`[^`]*`", "", text)
+    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
+    text = re.sub(r"\[([^\]]*)\]\(.*?\)", r"\1", text)
+    text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", text)
+    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+    return text
+
+
+def _keep_context(text: str, window: int = CONTEXT_WINDOW) -> str:
+    low = text.lower()
+    spans: list[tuple[int, int]] = []
+    for kw in _ext_keywords():
+        start = 0
+        while True:
+            idx = low.find(kw, start)
+            if idx == -1:
+                break
+            left = max(0, idx - window)
+            right = min(len(text), idx + len(kw) + window)
+            spans.append((left, right))
+            start = idx + 1
+    if not spans:
+        return ""
+    spans.sort()
+    merged: list[tuple[int, int]] = [spans[0]]
+    for l, r in spans[1:]:
+        if l <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], r))
+        else:
+            merged.append((l, r))
+    return "\n".join(text[l:r] for l, r in merged)
+
+
+def preprocess_content(content: str, file_url: str) -> str | None:
+    ext = _file_ext(file_url)
+
+    # 1. markdown
+    if ext in (".md", ".markdown", ".mdown", ".mkd", ".mkdown"):
+        stripped = _strip_md(content)
+        result = _keep_context(stripped)
+        return result if result else None
+
+    # 2. json / yaml / toml
+    if ext in (".json", ".yaml", ".yml", ".toml"):
+        try:
+            if ext == ".toml":
+                import tomllib
+
+                data = tomllib.loads(content)
+            elif ext in (".yaml", ".yml"):
+                import yaml
+
+                data = yaml.safe_load(content)
+            else:
+                data = json.loads(content)
+        except Exception:
+            return _keep_context(content) or None
+        if isinstance(data, dict):
+            relevant = {}
+            for k, v in data.items():
+                kl = k.lower()
+                if any(w in kl for w in _CONTEXT_WORDS):
+                    relevant[k] = str(v) if not isinstance(v, str) else v
+            if not relevant:
+                return None
+            return json.dumps(relevant, indent=2, ensure_ascii=False)
+        return None
+
+    # 3. simple kv pairs (ini / env / conf)
+    if ext in (".ini", ".env", ".cfg", ".conf", ".properties"):
+        lines: list[str] = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith(";"):
+                continue
+            if "=" in line:
+                k = line.split("=", 1)[0].strip().lower()
+                if any(w in k for w in _CONTEXT_WORDS):
+                    lines.append(line)
+        return "\n".join(lines) if lines else None
+
+    # 4. plain text
+    if ext in (".txt", ".text", ""):
+        return _keep_context(content) or None
+
+    # 5. unknown — skip
+    print(f"  warning: unknown file type '{ext}', skipping")
+    return None
 
 
 def llm_extract_all(
@@ -552,8 +708,12 @@ def process_issue(
     content = resp.text
 
     if llm_scan:
+        preprocessed = preprocess_content(content, file_url)
+        if preprocessed is None:
+            print("  No relevant content after preprocessing.")
+            return 0, 0
         result = llm_extract_all(
-            content, llm_base_url, llm_model, llm_api_key, llm_reasoning_mode
+            preprocessed, llm_base_url, llm_model, llm_api_key, llm_reasoning_mode
         )
         if not result:
             print("  LLM found nothing.")
