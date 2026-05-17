@@ -472,7 +472,7 @@ extract all api keys from the file along with their associated model name and ba
 
 for each key found, return:
 - "key": the full api key string
-- "key_type": what kind of key (e.g. "LLM API Key", "AWS Access Key", "GitHub Token", "Slack Token", "Stripe Key", "Private Key", "MongoDB URI", "Service API Key", "Service API Key: <SERVICE_NAME>", "Generic Secret", etc.)
+- "key_type": what kind of key (e.g. "LLM API Key", "LLM API Key: <PROVIDER_NAME>", "Private Key", "MongoDB URI", "Service API Key", "Service API Key: <SERVICE_NAME>", "Generic Secret", etc.)
 - "model_name": the model name if key is LLM key and model configured nearby (e.g. "gpt-4", "claude-3", "glm-5", "deepseek-chat"), or "" if none
 - "base_url": the base url if key is LLM key and base url configured or can be inferred from the provider name, or "" if none
 
