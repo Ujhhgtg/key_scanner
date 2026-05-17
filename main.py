@@ -292,7 +292,11 @@ def process_issue(
     print(f"\nFile URL: {file_url}")
 
     raw_url = file_url_to_raw(file_url)
-    resp = httpx.get(raw_url, timeout=30.0)
+    try:
+        resp = httpx.get(raw_url, timeout=30.0)
+    except httpx.HTTPError as e:
+        print(f"  Network error: {e}")
+        return 0, 0
     if resp.status_code != 200:
         print(f"  Could not read file (HTTP {resp.status_code})")
         return 0, 0
@@ -376,7 +380,7 @@ def main() -> None:
         while True:
             resp = client.get(
                 "https://api.github.com/search/issues",
-                params={"q": "your key leak", "per_page": 100, "page": page},
+                params={"q": "your key leak is:issue", "per_page": 100, "page": page},
             )
             if resp.status_code == 422 and page > 10:
                 break
