@@ -473,9 +473,13 @@ def _build_provider_lines(content: str) -> str:
 
 
 def llm_extract_all(
-    content: str, llm_base_url: str, llm_model: str, reasoning_mode: str = "off"
+    content: str,
+    llm_base_url: str,
+    llm_model: str,
+    llm_api_key: str,
+    reasoning_mode: str = "off",
 ) -> list[dict[str, str]]:
-    client = OpenAI(base_url=llm_base_url, api_key="sk-noop", timeout=30)
+    client = OpenAI(base_url=llm_base_url, api_key=llm_api_key, timeout=30)
     try:
         kwargs: dict = {
             "model": llm_model,
@@ -519,6 +523,7 @@ def process_issue(
     llm_scan: bool = False,
     llm_base_url: str = "",
     llm_model: str = "",
+    llm_api_key: str = "",
     llm_reasoning_mode: str = "off",
 ) -> tuple[int, int]:
     repo_url: str = issue["repository_url"]
@@ -547,7 +552,9 @@ def process_issue(
     content = resp.text
 
     if llm_scan:
-        result = llm_extract_all(content, llm_base_url, llm_model, llm_reasoning_mode)
+        result = llm_extract_all(
+            content, llm_base_url, llm_model, llm_api_key, llm_reasoning_mode
+        )
         if not result:
             print("  LLM found nothing.")
             return 0, 0
@@ -672,6 +679,7 @@ def main() -> None:
         sys.exit(1)
 
     llm_base_url = os.environ.get("LLM_BASE_URL", "").strip()
+    llm_api_key = os.environ.get("LLM_API_KEY", "").strip()
     llm_model_name = os.environ.get("LLM_MODEL_NAME", "").strip()
     llm_reasoning_mode = os.environ.get("LLM_REASONING_MODE", "off").strip().lower()
     if llm_reasoning_mode not in ("off", "low", "medium", "high", "xhigh", "max"):
@@ -728,6 +736,7 @@ def main() -> None:
                         args.llm_scan,
                         llm_base_url,
                         llm_model_name,
+                        llm_api_key,
                         llm_reasoning_mode,
                     )
                     for issue in batch
