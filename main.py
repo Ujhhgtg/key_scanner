@@ -473,6 +473,7 @@ extract all api keys from the file along with their associated model name and ba
 for each key found, return:
 - "key": the full api key string
 - "key_type": what kind of key (e.g. "LLM API Key", "LLM API Key: <PROVIDER_NAME>", "Private Key", "MongoDB URI", "Service API Key", "Service API Key: <SERVICE_NAME>", "Generic Secret", etc.)
+- "provider_name": english, lowercase provider name (e.g. "google", "openai", "anthropic", "baidu", "aliyun", "deepseek", "openrouter"), or "" if unknown. this MUST be provider name, not model name.
 - "model_name": the model name if key is LLM key and model configured nearby (e.g. "gpt-4", "claude-3", "glm-5", "deepseek-chat"), or "" if none
 - "base_url": the base url if key is LLM key and base url configured or can be inferred from the provider name, or "" if none
 
@@ -749,6 +750,7 @@ def process_issue(
         for item in result:
             key_value = (item.get("key") or "").strip()
             key_type = (item.get("key_type") or "Unknown").strip()
+            provider_name = (item.get("provider_name") or "").strip().lower()
             model_name = (item.get("model_name") or "").strip()
             base_url = (item.get("base_url") or "").strip()
 
@@ -759,6 +761,8 @@ def process_issue(
                 skipped += 1
                 continue
             print(f"  Found: [{key_type}] {key_value}")
+            if provider_name:
+                print(f"    provider_name: {provider_name}")
             if model_name:
                 print(f"    model_name: {model_name}")
             if base_url:
@@ -785,6 +789,8 @@ def process_issue(
                     "valid_type": valid_type,
                     "validation_result": validation_result,
                 }
+                if provider_name:
+                    entry["provider_name"] = provider_name
                 if model_name:
                     entry["model_name"] = model_name
                 if base_url:
