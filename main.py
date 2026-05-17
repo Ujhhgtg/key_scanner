@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
+import json5
 from dotenv import load_dotenv
 from openai import (
     APIStatusError,
@@ -269,6 +270,120 @@ def verify_key(api_key: str, base_url: str, model_name: str | None) -> tuple[str
         return "error", str(e)
 
 
+PROVIDER_MAP: list[tuple[set[str], str]] = [
+    ({"openai"}, "https://api.openai.com/v1"),
+    ({"azure"}, "https://<resource>.openai.azure.com"),
+    ({"anthropic", "claude"}, "https://api.anthropic.com/v1"),
+    ({"google", "gemini"}, "https://generativelanguage.googleapis.com/v1"),
+    ({"groq"}, "https://api.groq.com/openai/v1"),
+    ({"together"}, "https://api.together.xyz/v1"),
+    ({"fireworks"}, "https://api.fireworks.ai/inference/v1"),
+    ({"deepseek"}, "https://api.deepseek.com/v1"),
+    ({"mistral"}, "https://api.mistral.ai/v1"),
+    ({"openrouter"}, "https://openrouter.ai/api/v1"),
+    ({"ollama"}, "http://localhost:11434/v1"),
+    ({"perplexity"}, "https://api.perplexity.ai"),
+    ({"cohere"}, "https://api.cohere.ai/v1"),
+    ({"xai", "grok"}, "https://api.x.ai/v1"),
+    (
+        {"火山引擎", "火山方舟", "volcengine", "ark", "豆包", "doubao"},
+        "https://ark.cn-beijing.volces.com/api/v3",
+    ),
+    (
+        {
+            "百度千帆",
+            "百度智能云",
+            "qianfan",
+            "ernie",
+            "百度文心",
+            "文心一言",
+            "wenxin",
+        },
+        "https://qianfan.baidubce.com/v2",
+    ),
+    (
+        {"阿里百炼", "阿里云", "dashscope", "千问", "qwen"},
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ),
+    (
+        {"智谱", "zhipu", "bigmodel", "glm", "chatglm"},
+        "https://open.bigmodel.cn/api/paas/v4",
+    ),
+]
+
+LLM_BASE_PROMPT = """You are analyzing a configuration file that may contain api keys, model names, and base urls for llm providers.
+
+extract all api keys from the file along with their associated model name and base url.
+
+for each key found, return:
+- "key": the full api key string
+- "key_type": what kind of key (e.g. "OpenAI API Key", "AWS Access Key", "GitHub Token", "Slack Token", "Stripe Key", "Private Key", "MongoDB URI", "Generic Secret", etc.)
+- "model_name": the model name if configured nearby (e.g. "gpt-4", "claude-3", "glm-5", "deepseek-chat"), or "" if none
+- "base_url": the base url if configured or can be inferred from the provider name, or "" if none
+
+if only a provider name is mentioned and the base url is not explicitly set, infer it from these known providers:
+"""
+
+LLM_PROMPT_TAIL = """
+- return ONLY a json array of objects. no markdown, no backticks, no explanation.
+- if nothing is found, return an empty array [].
+
+file content:
+"""
+
+
+def _parse_llm_json(text: str):
+    text = text.strip()
+    if text.startswith("```"):
+        for prefix in ("```json\n", "```jsonl\n", "```"):
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+                break
+        if text.endswith("```"):
+            text = text[:-3]
+    text = text.strip()
+    data = json5.loads(text)
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _build_provider_lines(content: str) -> str:
+    content_lower = content.lower()
+    lines = []
+    for keywords, url in PROVIDER_MAP:
+        for kw in keywords:
+            if kw.lower() in content_lower:
+                names = " / ".join(f'"{k}"' for k in keywords)
+                lines.append(f'  - {names} -> "{url}"')
+                break
+    if not lines:
+        lines.append("  (no provider name detected)")
+    return "\n".join(lines)
+
+
+def llm_extract_all(
+    content: str, llm_base_url: str, llm_model: str
+) -> list[dict[str, str]]:
+    client = OpenAI(base_url=llm_base_url, api_key="sk-noop", timeout=30)
+    try:
+        mappings = _build_provider_lines(content)
+        prompt = LLM_BASE_PROMPT + mappings + "\n" + LLM_PROMPT_TAIL
+        resp = client.chat.completions.create(
+            model=llm_model,
+            messages=[{"role": "user", "content": prompt + content}],
+            temperature=0,
+            max_tokens=1500,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        return _parse_llm_json(text)
+    except Exception as e:
+        print(f"    llm scan failed: {e}", file=sys.stderr)
+        return []
+
+
 def extract_keys(content: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for pattern, name in KEY_PATTERNS:
@@ -278,7 +393,13 @@ def extract_keys(content: str) -> list[tuple[str, str]]:
 
 
 def process_issue(
-    issue: dict, saved_keys: set[str], lock: threading.Lock, ignore_saved: bool = False
+    issue: dict,
+    saved_keys: set[str],
+    lock: threading.Lock,
+    ignore_saved: bool = False,
+    llm_scan: bool = False,
+    llm_base_url: str = "",
+    llm_model: str = "",
 ) -> tuple[int, int]:
     repo_url: str = issue["repository_url"]
     parts = repo_url.rstrip("/").split("/")
@@ -300,6 +421,62 @@ def process_issue(
         return 0, 0
 
     content = resp.text
+
+    if llm_scan:
+        result = llm_extract_all(content, llm_base_url, llm_model)
+        if not result:
+            print("  LLM found nothing.")
+            return 0, 0
+        processed = 0
+        skipped = 0
+        for item in result:
+            key_value = (item.get("key") or "").strip()
+            key_type = (item.get("key_type") or "Unknown").strip()
+            model_name = (item.get("model_name") or "").strip()
+            base_url = (item.get("base_url") or "").strip()
+
+            if not key_value:
+                continue
+            if not is_valid_key(key_value):
+                print("  Found invalid key")
+                skipped += 1
+                continue
+            print(f"  Found: [{key_type}] {key_value}")
+            if model_name:
+                print(f"    model_name: {model_name}")
+            if base_url:
+                print(f"    base_url:  {base_url}")
+
+            valid_type = ""
+            validation_result = ""
+            if base_url:
+                valid_type, validation_result = verify_key(
+                    key_value, base_url, model_name
+                )
+                print(f"    verification: {valid_type}")
+
+            with lock:
+                if not ignore_saved and key_value in saved_keys:
+                    skipped += 1
+                    continue
+                entry = {
+                    "key": key_value,
+                    "key_type": key_type,
+                    "repo_owner": owner,
+                    "repo_name": repo_name,
+                    "file_url": file_url,
+                    "valid_type": valid_type,
+                    "validation_result": validation_result,
+                }
+                if model_name:
+                    entry["model_name"] = model_name
+                if base_url:
+                    entry["base_url"] = base_url
+                save_key(entry)
+                saved_keys.add(key_value)
+            processed += 1
+        return processed, skipped
+
     keys = extract_keys(content)
     if not keys:
         print("  No keys found in file.")
@@ -356,7 +533,24 @@ def main() -> None:
     parser.add_argument(
         "--ignore-saved", action="store_true", help="Re-verify and overwrite saved keys"
     )
+    parser.add_argument(
+        "--llm-scan",
+        action="store_true",
+        help="Use LLM to extract model/base_url from leaked files",
+    )
     args = parser.parse_args()
+
+    llm_base_url = ""
+    llm_model_name = ""
+    if args.llm_scan:
+        llm_base_url = os.environ.get("LLM_BASE_URL", "").strip()
+        llm_model_name = os.environ.get("LLM_MODEL_NAME", "").strip()
+        if not llm_base_url or not llm_model_name:
+            print(
+                "error: --llm-scan requires LLM_BASE_URL and LLM_MODEL_NAME in .env",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     load_dotenv()
     token = os.environ.get("GITHUB_API_KEY", "").strip()
@@ -399,7 +593,14 @@ def main() -> None:
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [
                     executor.submit(
-                        process_issue, issue, saved_keys, lock, args.ignore_saved
+                        process_issue,
+                        issue,
+                        saved_keys,
+                        lock,
+                        args.ignore_saved,
+                        args.llm_scan,
+                        llm_base_url,
+                        llm_model_name,
                     )
                     for issue in batch
                 ]
