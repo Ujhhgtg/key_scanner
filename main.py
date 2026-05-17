@@ -685,13 +685,21 @@ def main() -> None:
     if llm_reasoning_mode not in ("off", "low", "medium", "high", "xhigh", "max"):
         llm_reasoning_mode = "off"
 
-    if args.llm_scan:
-        if not llm_base_url or not llm_model_name:
-            print(
-                "error: --llm-scan requires LLM_BASE_URL and LLM_MODEL_NAME in .env",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+    missing: list[str] = []
+    if not llm_base_url:
+        missing.append("LLM_BASE_URL")
+    if not llm_api_key:
+        missing.append("LLM_API_KEY")
+    if not llm_model_name:
+        missing.append("LLM_MODEL_NAME")
+    if not llm_reasoning_mode:
+        missing.append("LLM_REASONING_MODE")
+    if missing:
+        print(
+            f"error: --llm-scan requires {', '.join(missing)} in .env",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     saved_keys = load_saved_keys()
     headers = {
