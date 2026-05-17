@@ -637,12 +637,7 @@ def preprocess_content(content: str, file_url: str) -> str | None:
         return "\n".join(lines) if lines else None
 
     # 4. plain text
-    if ext in (".txt", ".text", ""):
-        return _keep_context(content) or None
-
-    # 5. unknown — skip
-    print(f"  warning: unknown file type '{ext}', skipping")
-    return None
+    return _keep_context(content) or None
 
 
 def llm_extract_all(

@@ -13,21 +13,33 @@ DATA_FILE = Path("leaked_keys.json")
 BAN_DURATION = 60.0
 
 PROVIDER_TIER: dict[str, int] = {
-    "google": 1, "anthropic": 1, "openai": 1, "deepseek": 1,
-    "aliyun": 1, "dashscope": 1,
-    "moonshot": 1, "kimi": 1,
+    "google": 1,
+    "anthropic": 1,
+    "openai": 1,
+    "deepseek": 1,
+    "aliyun": 1,
+    "dashscope": 1,
+    "moonshot": 1,
+    "kimi": 1,
     "minimax": 1,
     "xiaomi": 1,
     "openrouter": 2,
     "ollama": 2,
-    "baidu": 3, "qianfan": 3, "ernie": 3,
+    "baidu": 3,
+    "qianfan": 3,
+    "ernie": 3,
     "mistral": 3,
 }
 
 HOP_HEADERS = {
-    "transfer-encoding", "connection", "keep-alive",
-    "proxy-authenticate", "proxy-authorization",
-    "te", "trailer", "upgrade",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "upgrade",
 }
 
 BEST_MODEL_MAP: dict[str, str] = {
@@ -56,8 +68,18 @@ KNOWN_MODELS: list[dict] = [
     {"id": "gpt-5", "object": "model", "created": 0, "owned_by": "openai"},
     {"id": "gpt-4.1", "object": "model", "created": 0, "owned_by": "openai"},
     {"id": "claude-opus-4-7", "object": "model", "created": 0, "owned_by": "anthropic"},
-    {"id": "claude-sonnet-4-5", "object": "model", "created": 0, "owned_by": "anthropic"},
-    {"id": "gemini-3.1-pro-preview", "object": "model", "created": 0, "owned_by": "google"},
+    {
+        "id": "claude-sonnet-4-5",
+        "object": "model",
+        "created": 0,
+        "owned_by": "anthropic",
+    },
+    {
+        "id": "gemini-3.1-pro-preview",
+        "object": "model",
+        "created": 0,
+        "owned_by": "google",
+    },
     {"id": "gemini-3.0-flash", "object": "model", "created": 0, "owned_by": "google"},
     {"id": "deepseek-v4-pro", "object": "model", "created": 0, "owned_by": "deepseek"},
     {"id": "deepseek-v3.2", "object": "model", "created": 0, "owned_by": "deepseek"},
@@ -151,8 +173,10 @@ async def _file_poll():
             if mtime != last_mtime:
                 last_mtime = mtime
                 store.reload()
-                print(f"[watcher] reloaded — {store.count()} valid LLM keys loaded",
-                      file=sys.stderr)
+                print(
+                    f"[watcher] reloaded — {store.count()} valid LLM keys loaded",
+                    file=sys.stderr,
+                )
         except FileNotFoundError:
             if last_mtime != 0:
                 last_mtime = 0
@@ -165,9 +189,17 @@ async def list_models():
     return JSONResponse({"object": "list", "data": KNOWN_MODELS})
 
 
-@app.api_route("/v1/{path:path}", methods=[
-    "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS",
-])
+@app.api_route(
+    "/v1/{path:path}",
+    methods=[
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH",
+        "OPTIONS",
+    ],
+)
 async def proxy(request: Request, path: str):
     body = await request.body()
     body_json: dict | None = None
@@ -231,8 +263,10 @@ async def proxy(request: Request, path: str):
                 await resp.aread()
                 await resp.aclose()
                 await client.aclose()
-                print(f"[proxy] {provider_name} returned {resp.status_code} — banning {BAN_DURATION}s",
-                      file=sys.stderr)
+                print(
+                    f"[proxy] {provider_name} returned {resp.status_code} — banning {BAN_DURATION}s",
+                    file=sys.stderr,
+                )
                 store.ban(provider_name)
                 continue
 
@@ -240,6 +274,7 @@ async def proxy(request: Request, path: str):
             is_stream = "text/event-stream" in content_type
 
             if is_stream:
+
                 async def _stream_body():
                     try:
                         async for chunk in resp.aiter_bytes():
@@ -249,7 +284,8 @@ async def proxy(request: Request, path: str):
                         await client.aclose()
 
                 resp_headers = {
-                    k: v for k, v in resp.headers.items()
+                    k: v
+                    for k, v in resp.headers.items()
                     if k.lower() not in HOP_HEADERS
                 }
                 return StreamingResponse(
@@ -263,7 +299,8 @@ async def proxy(request: Request, path: str):
                 await client.aclose()
 
                 resp_headers = {
-                    k: v for k, v in resp.headers.items()
+                    k: v
+                    for k, v in resp.headers.items()
                     if k.lower() not in HOP_HEADERS
                 }
                 return Response(
@@ -273,16 +310,21 @@ async def proxy(request: Request, path: str):
                 )
         except Exception as exc:
             await client.aclose()
-            print(f"[proxy] {provider_name} exception: {exc} — banning {BAN_DURATION}s",
-                  file=sys.stderr)
+            print(
+                f"[proxy] {provider_name} exception: {exc} — banning {BAN_DURATION}s",
+                file=sys.stderr,
+            )
             store.ban(provider_name)
             continue
 
-    return JSONResponse({"error": "all providers failed or are banned"}, status_code=502)
+    return JSONResponse(
+        {"error": "all providers failed or are banned"}, status_code=502
+    )
 
 
 def serve(host: str = "localhost", port: int = 6767):
     print(f"Key Scanner Proxy starting on http://{host}:{port}/v1/")
     print(f"Loaded {store.count()} valid LLM keys from {DATA_FILE}")
     import uvicorn
+
     uvicorn.run(app, host=host, port=port, log_level="warning")
