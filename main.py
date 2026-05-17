@@ -287,20 +287,20 @@ def verify_key(api_key: str, base_url: str, model_name: str | None) -> tuple[str
 
 
 PROVIDER_MAP: list[tuple[set[str], str]] = [
-    ({"openai"}, "https://api.openai.com/v1"),
+    ({"chatgpt", "openai"}, "https://api.openai.com/v1"),
     ({"azure"}, "https://<resource>.openai.azure.com"),
     ({"anthropic", "claude"}, "https://api.anthropic.com/v1"),
     ({"google", "gemini"}, "https://generativelanguage.googleapis.com/v1"),
     ({"groq"}, "https://api.groq.com/openai/v1"),
     ({"together"}, "https://api.together.xyz/v1"),
     ({"fireworks"}, "https://api.fireworks.ai/inference/v1"),
-    ({"deepseek"}, "https://api.deepseek.com/v1"),
+    ({"深度求索", "deepseek"}, "https://api.deepseek.com/v1"),
     ({"mistral"}, "https://api.mistral.ai/v1"),
     ({"openrouter"}, "https://openrouter.ai/api/v1"),
     ({"ollama"}, "http://localhost:11434/v1"),
     ({"perplexity"}, "https://api.perplexity.ai"),
     ({"cohere"}, "https://api.cohere.ai/v1"),
-    ({"xai", "grok"}, "https://api.x.ai/v1"),
+    ({"x.ai", "xai", "grok"}, "https://api.x.ai/v1"),
     (
         {"火山引擎", "火山方舟", "volcengine", "ark", "豆包", "doubao"},
         "https://ark.cn-beijing.volces.com/api/v3",
@@ -683,6 +683,9 @@ def main() -> None:
     llm_model_name = os.environ.get("LLM_MODEL_NAME", "").strip()
     llm_reasoning_mode = os.environ.get("LLM_REASONING_MODE", "off").strip().lower()
     if llm_reasoning_mode not in ("off", "low", "medium", "high", "xhigh", "max"):
+        print(
+            f"warning: unknown reasoning mode '{llm_reasoning_mode}', defaulting to 'off'"
+        )
         llm_reasoning_mode = "off"
 
     missing: list[str] = []
