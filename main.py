@@ -655,6 +655,7 @@ def llm_extract_all(
         }
         if reasoning_mode != "off":
             kwargs["reasoning_effort"] = reasoning_mode
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
         resp = client.chat.completions.create(**kwargs)
         text = (resp.choices[0].message.content or "").strip()
         return _parse_llm_json(text)  # type: ignore[return-value]
