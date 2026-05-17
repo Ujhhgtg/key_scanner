@@ -1,0 +1,7 @@
+[project]
+name = "key-scanner"
+version = "0.1.0"
+description = "Automatic API key scanner"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["httpx", "python-dotenv", "openai"]
