@@ -148,16 +148,19 @@ BASE_URL_PATTERNS = [
     r"""(?i)^\s*(?:BASE_URL|API_BASE|OPENAI_BASE_URL)\s*=\s*(\S+)""",
 ]
 
-
 CHAT_MODEL_KEYWORDS = [
     "gpt",
     "chat",
     "o1",
     "o3",
+    "o4",
     "claude",
     "gemini",
+    "gemma",
     "llama",
     "mistral",
+    "codestral",
+    "ministral",
     "qwen",
     "deepseek",
     "command",
@@ -168,6 +171,19 @@ CHAT_MODEL_KEYWORDS = [
     "cohere",
     "aya",
     "minicpm",
+    "glm",
+    "ernie",
+    "doubao",
+    "yi-",
+    "baichuan",
+    "internlm",
+    "falcon",
+    "grok",
+    "wizard",
+    "vicuna",
+    "solar",
+    "reka",
+    "stablelm",
 ]
 NON_CHAT_KEYWORDS = [
     "embedding",
@@ -309,6 +325,98 @@ PROVIDER_MAP: list[tuple[set[str], str]] = [
         {"智谱", "zhipu", "bigmodel", "glm", "chatglm"},
         "https://open.bigmodel.cn/api/paas/v4",
     ),
+    (
+        {"硅基流动", "siliconflow"},
+        "https://api.siliconflow.cn/v1",
+    ),
+    (
+        {"nvidia", "nim"},
+        "https://integrate.api.nvidia.com/v1",
+    ),
+    (
+        {"cerebras"},
+        "https://api.cerebras.ai/v1",
+    ),
+    (
+        {"huggingface", "hugging face"},
+        "https://api-inference.huggingface.co/models",
+    ),
+    (
+        {"modelscope", "魔搭"},
+        "https://api-inference.modelscope.cn/v1",
+    ),
+    (
+        {"moonshot", "kimi", "月之暗面"},
+        "https://api.moonshot.cn/v1",
+    ),
+    (
+        {"minimax"},
+        "https://api.minimax.chat/v1",
+    ),
+    (
+        {"deepinfra"},
+        "https://api.deepinfra.com/v1/openai",
+    ),
+    (
+        {"hyperbolic"},
+        "https://api.hyperbolic.xyz/v1",
+    ),
+    (
+        {"github models", "github"},
+        "https://models.inference.ai.azure.com",
+    ),
+    (
+        {"llama", "meta"},
+        "https://api.llama-api.com/chat/completions",
+    ),
+    (
+        {"cloudflare"},
+        "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run",
+    ),
+    (
+        {"sambanova", "samba"},
+        "https://api.sambanova.ai/v1",
+    ),
+    (
+        {"ai21"},
+        "https://api.ai21.com/studio/v1",
+    ),
+    (
+        {"replicate"},
+        "https://api.replicate.com/v1",
+    ),
+    (
+        {"lepton"},
+        "https://<workspace>.lepton.ai/api/v1",
+    ),
+    (
+        {"anyscale"},
+        "https://api.endpoints.anyscale.com/v1",
+    ),
+    (
+        {"arcee", "arcee ai"},
+        "https://api.arcee.ai/api/v1",
+    ),
+    (
+        {"novita"},
+        "https://api.novita.ai/openai",
+    ),
+    (
+        {"parasail"},
+        "https://api.parasail.io/v1",
+    ),
+    (
+        {"recraft"},
+        "https://external.api.recraft.ai/v1",
+    ),
+    (
+        {"streamlake", "kuaishou", "kwai", "wanqing", "vanchin"},
+        "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+    ),
+    (
+        {"baseten"},
+        "https://inference.baseten.co/v1",
+    ),
 ]
 
 LLM_BASE_PROMPT = """You are analyzing a configuration file that may contain api keys, model names, and base urls for llm providers.
@@ -365,20 +473,31 @@ def _build_provider_lines(content: str) -> str:
 
 
 def llm_extract_all(
-    content: str, llm_base_url: str, llm_model: str
+    content: str, llm_base_url: str, llm_model: str, reasoning_mode: str = "off"
 ) -> list[dict[str, str]]:
     client = OpenAI(base_url=llm_base_url, api_key="sk-noop", timeout=30)
     try:
-        mappings = _build_provider_lines(content)
-        prompt = LLM_BASE_PROMPT + mappings + "\n" + LLM_PROMPT_TAIL
-        resp = client.chat.completions.create(
-            model=llm_model,
-            messages=[{"role": "user", "content": prompt + content}],
-            temperature=0,
-            max_tokens=1500,
-        )
+        kwargs: dict = {
+            "model": llm_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": LLM_BASE_PROMPT
+                    + _build_provider_lines(content)
+                    + "\n"
+                    + LLM_PROMPT_TAIL
+                    + content,
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 1500,
+            "extra_body": {"thinking": {"type": "disabled"}},
+        }
+        if reasoning_mode != "off":
+            kwargs["reasoning_effort"] = reasoning_mode
+        resp = client.chat.completions.create(**kwargs)
         text = (resp.choices[0].message.content or "").strip()
-        return _parse_llm_json(text)
+        return _parse_llm_json(text)  # type: ignore[return-value]
     except Exception as e:
         print(f"    llm scan failed: {e}", file=sys.stderr)
         return []
@@ -400,6 +519,7 @@ def process_issue(
     llm_scan: bool = False,
     llm_base_url: str = "",
     llm_model: str = "",
+    llm_reasoning_mode: str = "off",
 ) -> tuple[int, int]:
     repo_url: str = issue["repository_url"]
     parts = repo_url.rstrip("/").split("/")
@@ -427,7 +547,7 @@ def process_issue(
     content = resp.text
 
     if llm_scan:
-        result = llm_extract_all(content, llm_base_url, llm_model)
+        result = llm_extract_all(content, llm_base_url, llm_model, llm_reasoning_mode)
         if not result:
             print("  LLM found nothing.")
             return 0, 0
@@ -544,23 +664,26 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    llm_base_url = ""
-    llm_model_name = ""
+    load_dotenv()
+
+    token = os.environ.get("GITHUB_API_KEY", "").strip()
+    if not token:
+        print("error: GITHUB_API_KEY is not set", file=sys.stderr)
+        sys.exit(1)
+
+    llm_base_url = os.environ.get("LLM_BASE_URL", "").strip()
+    llm_model_name = os.environ.get("LLM_MODEL_NAME", "").strip()
+    llm_reasoning_mode = os.environ.get("LLM_REASONING_MODE", "off").strip().lower()
+    if llm_reasoning_mode not in ("off", "low", "medium", "high", "xhigh", "max"):
+        llm_reasoning_mode = "off"
+
     if args.llm_scan:
-        llm_base_url = os.environ.get("LLM_BASE_URL", "").strip()
-        llm_model_name = os.environ.get("LLM_MODEL_NAME", "").strip()
         if not llm_base_url or not llm_model_name:
             print(
                 "error: --llm-scan requires LLM_BASE_URL and LLM_MODEL_NAME in .env",
                 file=sys.stderr,
             )
             sys.exit(1)
-
-    load_dotenv()
-    token = os.environ.get("GITHUB_API_KEY", "").strip()
-    if not token:
-        print("error: GITHUB_API_KEY is not set", file=sys.stderr)
-        sys.exit(1)
 
     saved_keys = load_saved_keys()
     headers = {
@@ -605,6 +728,7 @@ def main() -> None:
                         args.llm_scan,
                         llm_base_url,
                         llm_model_name,
+                        llm_reasoning_mode,
                     )
                     for issue in batch
                 ]
