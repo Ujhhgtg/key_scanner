@@ -637,16 +637,24 @@ def llm_extract_all(
 ) -> list[dict[str, str]]:
     client = OpenAI(base_url=llm_base_url, api_key=llm_api_key, timeout=30)
     try:
+        import tiktoken
+
+        provider_hints = _build_provider_lines(content)
+        prompt_text = (
+            LLM_BASE_PROMPT + provider_hints + "\n" + LLM_PROMPT_TAIL + content
+        )
+        try:
+            enc = tiktoken.encoding_for_model(llm_model)
+        except Exception:
+            enc = tiktoken.get_encoding("cl100k_base")
+        token_count = len(enc.encode(prompt_text))
+        print(f"  estimated token count: ~{token_count}")
         kwargs: dict = {
             "model": llm_model,
             "messages": [
                 {
                     "role": "user",
-                    "content": LLM_BASE_PROMPT
-                    + _build_provider_lines(content)
-                    + "\n"
-                    + LLM_PROMPT_TAIL
-                    + content,
+                    "content": prompt_text,
                 }
             ],
             "temperature": 0,
@@ -830,6 +838,11 @@ def main() -> None:
         action="store_true",
         help="Use LLM to extract model/base_url from leaked files",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Disable concurrency and sleep 5s after each issue",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -897,10 +910,9 @@ def main() -> None:
                 break
 
             print(f"\n--- Page {page} ({len(batch)} issues) ---")
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [
-                    executor.submit(
-                        process_issue,
+            if args.debug:
+                for issue in batch:
+                    p, s = process_issue(
                         issue,
                         saved_keys,
                         lock,
@@ -911,12 +923,31 @@ def main() -> None:
                         llm_api_key,
                         llm_reasoning_mode,
                     )
-                    for issue in batch
-                ]
-                for f in as_completed(futures):
-                    p, s = f.result()
                     total_processed += p
                     total_skipped += s
+                    import time
+                    time.sleep(5)
+            else:
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [
+                        executor.submit(
+                            process_issue,
+                            issue,
+                            saved_keys,
+                            lock,
+                            args.ignore_saved,
+                            args.llm_scan,
+                            llm_base_url,
+                            llm_model_name,
+                            llm_api_key,
+                            llm_reasoning_mode,
+                        )
+                        for issue in batch
+                    ]
+                    for f in as_completed(futures):
+                        p, s = f.result()
+                        total_processed += p
+                        total_skipped += s
 
             if len(batch) < 100:
                 break
